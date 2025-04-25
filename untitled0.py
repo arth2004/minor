@@ -9,9 +9,10 @@ Original file is located at
 
 import numpy as np
 import pandas as pd
+from textblob import TextBlob
 
 movies=pd.read_csv('tmdb_5000_movies.csv')
-credits=pd.read_csv('tmdb_5000_credits.csv')
+credits = pd.read_csv('tmdb_5000_credits.csv', engine='python', quotechar='"', on_bad_lines='skip')
 
 movies.info()
 
@@ -71,7 +72,7 @@ movies['crew']= movies['crew'].apply(fetch_director)
 
 movies['production_companies']= movies['production_companies'].apply(convert)
 
-movies['overview']= movies['overview'].apply(lambda x:x.split())
+movies['overview'] = movies['overview'].apply(lambda x: ' '.join(x))
 
 movies['genres']= movies['genres'].apply(lambda x:[i.replace(" ","") for i in x])
 movies['keywords']= movies['keywords'].apply(lambda x:[i.replace(" ","") for i in x])
@@ -79,13 +80,39 @@ movies['cast']= movies['cast'].apply(lambda x:[i.replace(" ","") for i in x])
 movies['crew']= movies['crew'].apply(lambda x:[i.replace(" ","") for i in x])
 movies['production_companies']= movies['production_companies'].apply(lambda x:[i.replace(" ","") for i in x])
 
-movies['tags'] = movies['overview'] + movies['genres'] + movies['keywords'] + movies['cast'] + movies['crew'] + movies['production_companies']
+def get_sentiment(text):
+    analysis = TextBlob(text)
+    return analysis.sentiment.polarity
+
+movies['sentiment'] = movies['overview'].apply(get_sentiment)
+
+def sentiment_category(sentiment_score):
+    if sentiment_score > 0:
+        return 'positive'
+    elif sentiment_score < 0:
+        return 'negative'
+    else:
+        return 'neutral'
+
+movies['sentiment_category'] = movies['sentiment'].apply(sentiment_category)
+
+movies['tags'] = (movies['overview'] + ' ' +
+                  movies['genres'].apply(lambda x: ' '.join(x)) + ' ' +
+                  movies['keywords'].apply(lambda x: ' '.join(x)) + ' ' +
+                  movies['cast'].apply(lambda x: ' '.join(x)) + ' ' +
+                  movies['crew'].apply(lambda x: ' '.join(x)) + ' ' +
+                  movies['production_companies'].apply(lambda x: ' '.join(x)) + ' ' +
+                  movies['sentiment_category'])
+
+print(movies['tags'].head())
 
 movies.head()
 
-new_df = movies[['movie_id','title','tags']]
+new_df = movies[['movie_id', 'title', 'tags', 'sentiment_category']]
 
-new_df['tags']= new_df['tags'].apply(lambda x:" ".join(x))
+new_df['tags'] = new_df['tags'].apply(lambda x: " ".join(x) if isinstance(x, list) else str(x))
+
+new_df['tags'] = new_df['tags'].apply(lambda x: x.lower())
 
 new_df['tags'][0]
 
@@ -93,18 +120,18 @@ new_df['tags'] = new_df['tags'].apply(lambda x:x.lower())
 
 new_df.head()
 
-# import nltk
+import nltk
 
 # !pip install nltk
 
 from nltk.stem.porter import PorterStemmer
 ps=PorterStemmer()
 
+# Define function to apply stemming
 def stem(text):
-  y=[]
-  for i in text.split():
-    y.append(ps.stem(i))
-  return " ".join(y)
+    if isinstance(text, str):  # Ensure it's a string before splitting
+        return " ".join([ps.stem(word) for word in text.split()])
+    return ""  # Return empty string if not a valid string
 
 new_df['tags']= new_df['tags'].apply(stem)
 
@@ -123,18 +150,46 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 similarity = cosine_similarity(vectors)
 
-def recommend(movie):
-  movie_index= new_df[new_df['title']==movie].index[0]
-  distances=similarity[movie_index]
-  movies_list=sorted(list(enumerate(distances)),reverse=True,key= lambda x:x[1])[1:6]
+def recommend(movie, sentiment_filter=None):
+    # Get the index of the movie
+    movie_index = new_df[new_df['title'] == movie].index[0]
 
-  for i in movies_list:
-    print(new_df.iloc[i[0]].title)
+    # Get similarity scores for the movie
+    distances = similarity[movie_index]
 
-recommend('Batman Begins')
+    # Sort movies by similarity score
+    movies_list = sorted(list(enumerate(distances)), reverse=True, key=lambda x: x[1])[1:6]
+
+    recommended_movies = []
+
+    # Apply sentiment filter (if any)
+    for i in movies_list:
+        movie_data = new_df.iloc[i[0]]
+
+        # Filter based on sentiment if provided
+        if sentiment_filter:
+            if movie_data['sentiment_category'] == sentiment_filter:
+                recommended_movies.append(movie_data['title'])
+        else:
+            recommended_movies.append(movie_data['title'])
+
+    # Print recommended movies
+    if not recommended_movies:
+        print("No movies match the sentiment filter.")
+    else:
+        print(f"Recommended Movies (Sentiment: {sentiment_filter}):")
+        for movie in recommended_movies:
+            print(movie)
+
+print(new_df.columns)
+
+recommend('Batman Begins', sentiment_filter='negative')
 
 import pickle
 
 pickle.dump(new_df.to_dict(),open('movie_dict.pkl','wb'))
 
 pickle.dump(similarity,open('similarity.pkl','wb'))
+
+
+
